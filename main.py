@@ -13,70 +13,84 @@ from sqlalchemy.orm import sessionmaker
 import config
 from models import PythonFile, PythonRepo, Base
 
-LANGUAGE_ID = 8
 
+class Analyser:
+    LANGUAGE_ID = 8
 
-def analyse(uid, db_conn, repo_id, files):
-    try:
-        logger.info(f'Started processing of a message [{uid}]')
-        session = sessionmaker(bind=db_conn)()
+    def __init__(self, uid, db_conn, repo_id, files):
+        self.uid = uid
+        self.db_conn = db_conn
+        self.repo_id = repo_id
+        self.files = files
+        self.out_channel = None
 
-        agg_stats = {}
-        for file in files:
-            with open(file, 'r') as f:
-                stats = analyze(f.read())
-                agg_stats[file] = stats
-                print(stats)
+    def analyse(self):
+        try:
+            logger.info(f'[{self.uid}] Started processing of the message')
 
-        save_stats(session, repo_id, agg_stats)
-        send_ack(repo_id)
-        logger.info(f'Message [{uid}] processed successfully')
-    except Exception as e:
-        logger.exception(f'Exception occurred during processing message [{uid}]: {e}')
+            session = sessionmaker(bind=db_conn)()
+            self.out_channel = pika.BlockingConnection(
+                pika.ConnectionParameters(host=config.RABBITMQ_HOST, port=config.RABBITMQ_PORT)
+            ).channel()
+            self.out_channel.confirm_delivery()
+            self.out_channel.queue_declare(queue=config.OUT_QUEUE_NAME, durable=True)
 
+            agg_stats = {}
+            for file in self.files:
+                with open(file, 'r') as f:
+                    stats = analyze(f.read())
+                    agg_stats[file] = stats
+                    print(stats)
 
-def save_stats(session, repo_id, agg_stats):
-    repo = PythonRepo(repo_id=repo_id)
-    session.add(repo)
+            self.save_stats(session, agg_stats)
+            self.send_ack()
+            logger.info(f'[{self.uid}] Message processed successfully')
+        except Exception as e:
+            logger.exception(f'[{self.uid}] Exception occurred during processing of the message: {e}')
 
-    for file, stats in agg_stats.items():
-        python_file = PythonFile(repo=repo, name=file, **stats._asdict())
+    def save_stats(self, session, agg_stats):
+        repo = PythonRepo(repo_id=self.repo_id)
+        session.add(repo)
 
-        session.add(python_file)
+        for file, stats in agg_stats.items():
+            python_file = PythonFile(repo=repo, name=file, **stats._asdict())
 
-    session.commit()
+            session.add(python_file)
 
+        session.commit()
 
-def send_ack(repo_id):
-    queue_name = 'gc'
-    msg = {
-        'repo_id': repo_id,
-        'language_id': LANGUAGE_ID,
-    }
-    send_to_queue(queue_name, msg)
+    def send_ack(self):
+        msg = {
+            'repo_id': self.repo_id,
+            'language_id': self.LANGUAGE_ID,
+        }
+        self.send_to_queue(msg)
 
-
-def send_to_queue(queue_name, msg):
-    return
-    connection = pika.BlockingConnection(pika.ConnectionParameters('localhost'))
-    channel = connection.channel()
-    channel.queue_declare(queue=queue_name)
-    channel.basic_publish(exchange='',
-                          routing_key=queue_name,
-                          body=json.dumps(msg))
+    def send_to_queue(self, msg):
+        queue_name = config.OUT_QUEUE_NAME
+        try:
+            self.out_channel.basic_publish(
+                exchange='',
+                routing_key=queue_name,
+                properties=pika.BasicProperties(delivery_mode=2),
+                body=json.dumps(msg).encode('utf-8')
+            )
+            logger.info(f'[{self.uid}] Message to the {queue_name} queue was received by RabbitMQ')
+        except pika.exceptions.NackError:
+            logger.exception(f'[{self.uid}] Message to the {queue_name} queue was rejected by RabbitMQ')
 
 
 def parse_message(uid, message):
     try:
         message = json.loads(message)
     except ValueError:
-        logger.warning(f'Message [{uid}] not a valid json')
+        logger.warning(f'[{uid}] Message not a valid json')
         return None
 
     required_keys = {'repo_id'}
     missing_keys = required_keys - set(message.keys())
     if missing_keys:
-        logger.warning(f'Message [{uid}] incomplete, missing keys: [{", ".join(missing_keys)}]')
+        logger.warning(f'[{uid}] Message incomplete, missing keys: [{", ".join(missing_keys)}]')
         return None
 
     return message
@@ -86,13 +100,13 @@ def process_incoming_message(db_conn, pool: ThreadPool, channel, method, propert
     channel.stop_consuming()
     message = body.decode('utf-8')
     uid = str(uuid.uuid4())
-    logger.info(f'Received message: [{uid}] {message}')
+    logger.info(f'[{uid}] Received message: {message}')
     message = parse_message(uid, message)
 
     if message is not None:
-        pool.apply_async(analyse, [uid, db_conn, message['repo_id'], ['main.py']])
+        pool.apply_async(Analyser(uid, db_conn, message['repo_id'], ['main.py']).analyse, [])
     else:
-        logger.info(f'Skipping invalid message [{uid}')
+        logger.info(f'[{uid}] Skipping invalid message')
 
     channel.basic_ack(delivery_tag=method.delivery_tag)
 
