@@ -2,10 +2,12 @@ import json
 import logging
 import uuid
 from functools import partial
+from multiprocessing.pool import ThreadPool
 
 import pika
 from radon.raw import analyze
 from sqlalchemy import create_engine
+from sqlalchemy.exc import OperationalError
 from sqlalchemy.orm import sessionmaker
 
 import config
@@ -14,16 +16,23 @@ from models import PythonFile, PythonRepo, Base
 LANGUAGE_ID = 8
 
 
-def analyse(session, repo_id, files):
-    agg_stats = {}
-    for file in files:
-        with open(file, 'r') as f:
-            stats = analyze(f.read())
-            agg_stats[file] = stats
-            print(stats)
+def analyse(uid, db_conn, repo_id, files):
+    try:
+        logger.info(f'Started processing of a message [{uid}]')
+        session = sessionmaker(bind=db_conn)()
 
-    save_stats(session, repo_id, agg_stats)
-    send_ack(repo_id)
+        agg_stats = {}
+        for file in files:
+            with open(file, 'r') as f:
+                stats = analyze(f.read())
+                agg_stats[file] = stats
+                print(stats)
+
+        save_stats(session, repo_id, agg_stats)
+        send_ack(repo_id)
+        logger.info(f'Message [{uid}] processed successfully')
+    except Exception as e:
+        logger.exception(f'Exception occurred during processing message [{uid}]: {e}')
 
 
 def save_stats(session, repo_id, agg_stats):
@@ -73,7 +82,7 @@ def parse_message(uid, message):
     return message
 
 
-def process_incoming_message(db_conn, channel, method, properties, body):
+def process_incoming_message(db_conn, pool: ThreadPool, channel, method, properties, body):
     channel.stop_consuming()
     message = body.decode('utf-8')
     uid = str(uuid.uuid4())
@@ -81,8 +90,7 @@ def process_incoming_message(db_conn, channel, method, properties, body):
     message = parse_message(uid, message)
 
     if message is not None:
-        session = sessionmaker(bind=db_conn)()
-        analyse(session, message['repo_id'], ['main.py'])
+        pool.apply_async(analyse, [uid, db_conn, message['repo_id'], ['main.py']])
     else:
         logger.info(f'Skipping invalid message [{uid}')
 
@@ -102,7 +110,7 @@ try:
     logger.info(f"Connecting to RabbitMQ and database...")
     with pika.BlockingConnection(
             pika.ConnectionParameters(host=config.RABBITMQ_HOST, port=config.RABBITMQ_PORT)
-        ) as rabbitmq_conn, engine.connect() as db_conn:
+        ) as rabbitmq_conn, engine.connect() as db_conn, ThreadPool(processes=4) as pool:
         logger.info('Connected')
 
         logger.info('Updating DB metadata...')
@@ -113,7 +121,7 @@ try:
         in_channel.confirm_delivery()
         in_channel.queue_declare(queue=config.IN_QUEUE_NAME, durable=True)
 
-        received_callback = partial(process_incoming_message, db_conn)
+        received_callback = partial(process_incoming_message, db_conn, pool)
         while True:
             in_channel.basic_consume(
                 queue=config.IN_QUEUE_NAME,
@@ -126,3 +134,5 @@ try:
 
 except pika.exceptions.AMQPConnectionError as e:
     logger.error(f"AMQP Connection Error: {e}")
+except OperationalError as e:
+    logger.error(f"DB Connection Error: {e}")
