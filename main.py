@@ -1,10 +1,15 @@
 import json
+import logging
+import uuid
+from functools import partial
 
+import pika
 from radon.raw import analyze
 from sqlalchemy import create_engine
 from sqlalchemy.orm import sessionmaker
 
-from models import PythonFile, PythonRepo
+import config
+from models import PythonFile, PythonRepo, Base
 
 LANGUAGE_ID = 8
 
@@ -26,7 +31,7 @@ def save_stats(session, repo_id, agg_stats):
     session.add(repo)
 
     for file, stats in agg_stats.items():
-        python_file = PythonFile(repo=repo, **stats._asdict())
+        python_file = PythonFile(repo=repo, name=file, **stats._asdict())
 
         session.add(python_file)
 
@@ -52,6 +57,72 @@ def send_to_queue(queue_name, msg):
                           body=json.dumps(msg))
 
 
-engine = create_engine('postgresql://user:pass@localhost:5432/sqlalchemy')
-session = sessionmaker(bind=engine)()
-analyse(session, 'g76sdyuhj', ['main.py'])
+def parse_message(uid, message):
+    try:
+        message = json.loads(message)
+    except ValueError:
+        logger.warning(f'Message [{uid}] not a valid json')
+        return None
+
+    required_keys = {'repo_id'}
+    missing_keys = required_keys - set(message.keys())
+    if missing_keys:
+        logger.warning(f'Message [{uid}] incomplete, missing keys: [{", ".join(missing_keys)}]')
+        return None
+
+    return message
+
+
+def process_incoming_message(db_conn, channel, method, properties, body):
+    channel.stop_consuming()
+    message = body.decode('utf-8')
+    uid = str(uuid.uuid4())
+    logger.info(f'Received message: [{uid}] {message}')
+    message = parse_message(uid, message)
+
+    if message is not None:
+        session = sessionmaker(bind=db_conn)()
+        analyse(session, message['repo_id'], ['main.py'])
+    else:
+        logger.info(f'Skipping invalid message [{uid}')
+
+    channel.basic_ack(delivery_tag=method.delivery_tag)
+
+
+engine = create_engine(config.DB_CONN_STRING)
+
+logger = logging.getLogger(__name__)
+logger.setLevel(logging.INFO)
+handler = logging.StreamHandler()
+formatter = logging.Formatter("%(asctime)s [%(threadName)s] [%(levelname)s] %(message)s")
+handler.setFormatter(formatter)
+logger.addHandler(handler)
+
+try:
+    logger.info(f"Connecting to RabbitMQ and database...")
+    with pika.BlockingConnection(
+            pika.ConnectionParameters(host=config.RABBITMQ_HOST, port=config.RABBITMQ_PORT)
+        ) as rabbitmq_conn, engine.connect() as db_conn:
+        logger.info('Connected')
+
+        logger.info('Updating DB metadata...')
+        Base.metadata.create_all(db_conn)
+        logger.info('Done')
+
+        in_channel = rabbitmq_conn.channel()
+        in_channel.confirm_delivery()
+        in_channel.queue_declare(queue=config.IN_QUEUE_NAME, durable=True)
+
+        received_callback = partial(process_incoming_message, db_conn)
+        while True:
+            in_channel.basic_consume(
+                queue=config.IN_QUEUE_NAME,
+                auto_ack=False,
+                on_message_callback=received_callback
+            )
+
+            logger.info('Waiting for a message...')
+            in_channel.start_consuming()
+
+except pika.exceptions.AMQPConnectionError as e:
+    logger.error(f"AMQP Connection Error: {e}")

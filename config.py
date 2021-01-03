@@ -1,0 +1,12 @@
+DB_HOST = '172.17.0.5'
+DB_PORT = 5432
+DB_USER = 'postgres'
+DB_PASS = '123'
+DB_NAME = 'frege'
+DB_CONN_STRING = f'postgresql://{DB_USER}:{DB_PASS}@{DB_HOST}:{DB_PORT}/{DB_NAME}'
+
+RABBITMQ_HOST = '172.17.0.2'
+RABBITMQ_PORT = 5672
+
+IN_QUEUE_NAME = 'idk'
+OUT_QUEUE_NAME = 'gc'

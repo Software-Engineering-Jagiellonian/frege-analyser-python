@@ -1,4 +1,4 @@
-from sqlalchemy import Column, Integer, String, ForeignKey
+from sqlalchemy import Column, Integer, String, ForeignKey, Text
 from sqlalchemy.ext.declarative import declarative_base
 from sqlalchemy.orm import relationship
 
@@ -15,6 +15,7 @@ class PythonRepo(Base):
 class PythonFile(Base):
     __tablename__ = 'pythonfile'
     id = Column(Integer, primary_key=True)
+    name = Column(Text)
     python_repo_id = Column(Integer, ForeignKey('pythonrepo.id'))
     repo = relationship('PythonRepo', back_populates="files")
     loc = Column(Integer)
