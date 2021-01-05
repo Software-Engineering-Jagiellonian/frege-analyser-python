@@ -11,17 +11,17 @@ from sqlalchemy.exc import OperationalError
 from sqlalchemy.orm import sessionmaker
 
 import config
-from models import PythonFile, PythonRepo, Base
+from models import PythonFile, RepositoryLanguage, Base
 
 
 class Analyser:
     LANGUAGE_ID = 8
 
-    def __init__(self, uid, db_conn, repo_id, files):
+    def __init__(self, uid, db_conn, repo_id):
         self.uid = uid
         self.db_conn = db_conn
         self.repo_id = repo_id
-        self.files = files
+        self.repo = None
         self.out_channel = None
 
     def analyse(self):
@@ -29,6 +29,13 @@ class Analyser:
             logger.info(f'[{self.uid}] Started processing of the message')
 
             session = sessionmaker(bind=db_conn)()
+            self.repo = session.query(RepositoryLanguage).filter(
+                RepositoryLanguage.repository_id == self.repo_id,
+                RepositoryLanguage.language_id == self.LANGUAGE_ID
+            ).first()
+            if not self.repo:
+                raise Exception('No repository entity found')
+
             self.out_channel = pika.BlockingConnection(
                 pika.ConnectionParameters(host=config.RABBITMQ_HOST, port=config.RABBITMQ_PORT)
             ).channel()
@@ -36,10 +43,10 @@ class Analyser:
             self.out_channel.queue_declare(queue=config.OUT_QUEUE_NAME, durable=True)
 
             agg_stats = {}
-            for file in self.files:
-                with open(file, 'r') as f:
+            for file in self.repo.files:
+                with open(file.file_path, 'r') as f:
                     stats = analyze(f.read())
-                    agg_stats[file] = stats
+                    agg_stats[file.id] = stats
                     print(stats)
 
             self.save_stats(session, agg_stats)
@@ -49,11 +56,8 @@ class Analyser:
             logger.exception(f'[{self.uid}] Exception occurred during processing of the message: {e}')
 
     def save_stats(self, session, agg_stats):
-        repo = PythonRepo(repo_id=self.repo_id)
-        session.add(repo)
-
         for file, stats in agg_stats.items():
-            python_file = PythonFile(repo=repo, name=file, **stats._asdict())
+            python_file = PythonFile(file_id=file, **stats._asdict())
 
             session.add(python_file)
 
@@ -104,7 +108,8 @@ def process_incoming_message(db_conn, pool: ThreadPool, channel, method, propert
     message = parse_message(uid, message)
 
     if message is not None:
-        pool.apply_async(Analyser(uid, db_conn, message['repo_id'], ['main.py']).analyse, [])
+        # apply_async for multithreading - only if instant ACK is acceptable
+        pool.apply(Analyser(uid, db_conn, message['repo_id']).analyse, [])
     else:
         logger.info(f'[{uid}] Skipping invalid message')
 
