@@ -19,15 +19,17 @@ class Analyser:
         self.repo_id = repo_id
         self.repo = None
         self.out_channel = None
+        self.session = None
 
     def analyse(self):
         try:
             logger.info(f'[{self.uid}] Started processing of the message')
 
-            session = sessionmaker(bind=self.db_conn)()
-            self.repo = session.query(RepositoryLanguage).filter(
+            self.session = sessionmaker(bind=self.db_conn)()
+            self.repo = self.session.query(RepositoryLanguage).filter(
                 RepositoryLanguage.repository_id == self.repo_id,
-                RepositoryLanguage.language_id == self.LANGUAGE_ID
+                RepositoryLanguage.language_id == self.LANGUAGE_ID,
+                RepositoryLanguage.present == True
             ).first()
             if not self.repo:
                 raise Exception('No repository entity found')
@@ -45,19 +47,21 @@ class Analyser:
                     agg_stats[file.id] = stats
                     print(stats)
 
-            self.save_stats(session, agg_stats)
+            self.save_stats( agg_stats)
             self.send_ack()
             logger.info(f'[{self.uid}] Message processed successfully')
         except Exception as e:
             logger.exception(f'[{self.uid}] Exception occurred during processing of the message: {e}')
 
-    def save_stats(self, session, agg_stats):
+    def save_stats(self, agg_stats):
         for file, stats in agg_stats.items():
             python_file = PythonFile(file_id=file, **stats._asdict())
 
-            session.add(python_file)
+            self.session.add(python_file)
 
-        session.commit()
+        self.repo.analyzed = True
+        self.session.add(self.repo)
+        self.session.commit()
 
     def send_ack(self):
         msg = {

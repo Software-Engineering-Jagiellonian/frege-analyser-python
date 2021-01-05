@@ -24,8 +24,8 @@ class Language(Base):
 class RepositoryLanguage(Base):
     __tablename__ = 'repository_language'
     id = Column(BigInteger, primary_key=True)
-    repository_id = Column(String(250), ForeignKey('repository.id'))
-    language_id = Column(SmallInteger, ForeignKey('language.id'))
+    repository_id = Column(String(250), ForeignKey('repositories.id'))
+    language_id = Column(SmallInteger, ForeignKey('languages.id'))
     present = Column(Boolean)
     analyzed = Column(Boolean)
     files = relationship('RepositoryLanguageFile', back_populates='repository_language')
