@@ -3,6 +3,7 @@ import logging
 import uuid
 from functools import partial
 from multiprocessing.pool import ThreadPool
+from time import sleep
 
 import pika
 from radon.raw import analyze
@@ -72,16 +73,20 @@ class Analyser:
 
     def send_to_queue(self, msg):
         queue_name = config.OUT_QUEUE_NAME
-        try:
-            self.out_channel.basic_publish(
-                exchange='',
-                routing_key=queue_name,
-                properties=pika.BasicProperties(delivery_mode=2),
-                body=json.dumps(msg).encode('utf-8')
-            )
-            logger.info(f'[{self.uid}] Message to the {queue_name} queue was received by RabbitMQ')
-        except pika.exceptions.NackError:
-            logger.exception(f'[{self.uid}] Message to the {queue_name} queue was rejected by RabbitMQ')
+        while True:
+            try:
+                self.out_channel.basic_publish(
+                    exchange='',
+                    routing_key=queue_name,
+                    properties=pika.BasicProperties(delivery_mode=2),
+                    body=json.dumps(msg).encode('utf-8')
+                )
+                break
+            except pika.exceptions.NackError:
+                logger.warning(f'[{self.uid}] Message to the {queue_name} queue was rejected by RabbitMQ')
+                sleep(config.PUBLISH_DELAY)
+
+        logger.info(f'[{self.uid}] Message to the {queue_name} queue was received by RabbitMQ')
 
 
 def parse_message(uid, message):
