@@ -1,6 +1,5 @@
 import os
 
-
 DB_HOST = os.environ['DB_HOST']
 DB_PORT = int(os.environ['DB_PORT'])
 DB_USER = os.environ['DB_USERNAME']
