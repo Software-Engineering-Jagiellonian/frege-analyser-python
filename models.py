@@ -79,3 +79,12 @@ class PythonFileHalsteadMetrics(Base):
     effort = Column(Float)
     time = Column(Float)
     bugs = Column(Float)
+
+
+class PythonFileMIMetrics(Base):
+    __tablename__ = 'python_file_mi_metrics'
+    id = Column(BigInteger, primary_key=True)
+    python_file_id = Column(BigInteger, ForeignKey('python_file.id'))
+    python_file = relationship('PythonFile', uselist=False, foreign_keys=[python_file_id])
+    score = Column(Float)
+    rank = Column(String(1))

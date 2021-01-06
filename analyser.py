@@ -7,6 +7,7 @@ from sqlalchemy.orm import sessionmaker
 import config
 from analysers.halstead import HalsteadAnalyser
 from analysers.loc import LOCAnalyser
+from analysers.maintainability_index import MIAnalyser
 from logger import logger
 from models import RepositoryLanguage, PythonFile
 
@@ -17,6 +18,7 @@ class Analyser:
     analysers = [
         LOCAnalyser,
         HalsteadAnalyser,
+        MIAnalyser,
     ]
 
     def __init__(self, uid, db_conn, repo_id):
