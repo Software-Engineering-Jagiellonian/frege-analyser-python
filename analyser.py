@@ -2,16 +2,22 @@ import json
 from time import sleep
 
 import pika
-from radon.raw import analyze
 from sqlalchemy.orm import sessionmaker
 
 import config
+from analysers.halstead import HalsteadAnalyser
+from analysers.loc import LOCAnalyser
 from logger import logger
 from models import RepositoryLanguage, PythonFile
 
 
 class Analyser:
     LANGUAGE_ID = 8
+
+    analysers = [
+        LOCAnalyser,
+        HalsteadAnalyser,
+    ]
 
     def __init__(self, uid, db_conn, repo_id):
         self.uid = uid
@@ -43,9 +49,8 @@ class Analyser:
             agg_stats = {}
             for file in self.repo.files:
                 with open(file.file_path, 'r') as f:
-                    stats = analyze(f.read())
+                    stats = self.run_analysers(f.read())
                     agg_stats[file.id] = stats
-                    print(stats)
 
             self.save_stats( agg_stats)
             self.send_ack()
@@ -55,7 +60,10 @@ class Analyser:
 
     def save_stats(self, agg_stats):
         for file, stats in agg_stats.items():
-            python_file = PythonFile(file_id=file, **stats._asdict())
+            python_file = PythonFile(file_id=file)
+            for metric in stats:
+                metric.python_file = python_file
+                self.session.add(metric)
 
             self.session.add(python_file)
 
@@ -86,3 +94,10 @@ class Analyser:
                 sleep(config.PUBLISH_DELAY)
 
         logger.info(f'[{self.uid}] Message to the {queue_name} queue was received by RabbitMQ')
+
+    def run_analysers(self, file_content):
+        stats = []
+        for analyser in self.analysers:
+            stats.append(analyser.analyse(file_content))
+
+        return stats

@@ -1,4 +1,4 @@
-from sqlalchemy import Column, Integer, String, ForeignKey, DateTime, BigInteger, SmallInteger, Boolean
+from sqlalchemy import Column, Integer, String, ForeignKey, DateTime, BigInteger, SmallInteger, Boolean, Float
 from sqlalchemy.ext.declarative import declarative_base
 from sqlalchemy.orm import relationship
 
@@ -40,10 +40,19 @@ class RepositoryLanguageFile(Base):
 
 
 class PythonFile(Base):
-    __tablename__ = 'pythonfile'
+    __tablename__ = 'python_file'
     id = Column(BigInteger, primary_key=True)
     file_id = Column(BigInteger, ForeignKey('repository_language_file.id'))
     file = relationship('RepositoryLanguageFile', uselist=False, foreign_keys=[file_id])
+    loc_metrics = relationship('PythonFileLOCMetrics',  back_populates="python_file")
+    halstead_metrics = relationship('PythonFileHalsteadMetrics',  back_populates="python_file")
+
+
+class PythonFileLOCMetrics(Base):
+    __tablename__ = 'python_file_loc_metrics'
+    id = Column(BigInteger, primary_key=True)
+    python_file_id = Column(BigInteger, ForeignKey('python_file.id'))
+    python_file = relationship('PythonFile', uselist=False, foreign_keys=[python_file_id])
     loc = Column(Integer)
     lloc = Column(Integer)
     sloc = Column(Integer)
@@ -51,3 +60,22 @@ class PythonFile(Base):
     multi = Column(Integer)
     blank = Column(Integer)
     single_comments = Column(Integer)
+
+
+class PythonFileHalsteadMetrics(Base):
+    __tablename__ = 'python_file_halstead_metrics'
+    id = Column(BigInteger, primary_key=True)
+    python_file_id = Column(BigInteger, ForeignKey('python_file.id'))
+    python_file = relationship('PythonFile', uselist=False, foreign_keys=[python_file_id])
+    h1 = Column(Integer)
+    h2 = Column(Integer)
+    N1 = Column(Integer)
+    N2 = Column(Integer)
+    vocabulary = Column(Integer)
+    length = Column(Integer)
+    calculated_length = Column(Float)
+    volume = Column(Float)
+    difficulty = Column(Float)
+    effort = Column(Float)
+    time = Column(Float)
+    bugs = Column(Float)
